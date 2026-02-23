@@ -11,7 +11,7 @@
 #include <time.h>
 
 // ===================== REDE =====================
-#define USE_DEV_NETWORK 1   // 0 = rede final, 1 = rede dev/teste
+#define USE_DEV_NETWORK 0   // 0 = rede final, 1 = rede dev/teste
 
 #if USE_DEV_NETWORK
 const char* ssid = "Quintinha_Dos_Lirios_Sala";
@@ -400,6 +400,9 @@ void loop(){
 
             dtostrf(setPoint,4,2,msg);
             mqttClient.publish("chickenpark/setpoint",msg);
+
+            sprintf(msg, "%d", relayState[0]);
+            mqttClient.publish("chickenpark/relay1", msg);
 
             dtostrf(hysteresis,4,2,msg);
             mqttClient.publish("chickenpark/hysteresis",msg);
