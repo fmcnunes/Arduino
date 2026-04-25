@@ -23,7 +23,7 @@ IPAddress dns(192,168,0,1);
 const char* mqttServer = "192.168.0.7";
 #else
 const char* ssid = "QuintinhaDosLirios";
-const char* password = "2ddf1ce803";
+const char* password = "Lirios!2025#";
 IPAddress localIP(192,168,1,33);
 IPAddress gateway(192,168,1,254);
 IPAddress subnet(255,255,255,0);
