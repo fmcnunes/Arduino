@@ -6,6 +6,7 @@
 #include <PubSubClient.h>
 #include <WebServer.h>
 
+//
 // =====================================================
 // WIFI CONFIG
 // =====================================================
@@ -19,21 +20,20 @@ static unsigned long lastAttempt = 0;
 #if USE_DEV_NETWORK
 const char* ssid = "Quintinha_Dos_Lirios_Sala";
 const char* password = "!fsnunes2020!";
-IPAddress localIP(192,168,0,33);
-IPAddress gateway(192,168,0,1);
-IPAddress subnet(255,255,255,0);
-IPAddress dns(192,168,0,1);
+IPAddress localIP(192, 168, 0, 33);
+IPAddress gateway(192, 168, 0, 1);
+IPAddress subnet(255, 255, 255, 0);
+IPAddress dns(192, 168, 0, 1);
 const char* mqttServer = "192.168.0.7";
 #else
 const char* ssid = "QuintinhaDosLirios";
 const char* password = "Lirios!2025#";
-IPAddress localIP(192,168,1,33);
-IPAddress gateway(192,168,1,254);
-IPAddress subnet(255,255,255,0);
-IPAddress dns(192,168,1,254);
+IPAddress localIP(192, 168, 1, 33);
+IPAddress gateway(192, 168, 1, 254);
+IPAddress subnet(255, 255, 255, 0);
+IPAddress dns(192, 168, 1, 254);
 const char* mqttServer = "192.168.1.50";
 #endif
-
 
 
 // =====================================================
@@ -49,11 +49,45 @@ void publishMQTT();
 // =====================================================
 // RELAYS
 // =====================================================
-const int relays[] = {16, 17, 25, 26};
+const int relays[] = { 16, 17, 25, 26 };
 
 #define RELAY_CLEAN 3
 #define RELAY_MOTOR 2
 #define RELAY_PUMP 0
+
+// =====================================================
+// SENSOR NIVEL
+// =====================================================
+#define LEVEL_SENSOR_PIN 21
+
+// =====================================================
+// TEMPOS
+// =====================================================
+
+const unsigned long FULL_CLEAN_TIME = 45000;
+const unsigned long QUARTER_ROTATION_TIME = FULL_CLEAN_TIME / 4;
+
+// =====================================================
+// ESTADOS
+// =====================================================
+enum FilterState {
+  STATE_NORMAL,
+  STATE_QUARTER_ROTATION,
+  STATE_CLEAN
+};
+
+FilterState state = STATE_NORMAL;
+
+unsigned long stateStartMs = 0;
+
+uint8_t quarterRotations = 0;
+
+static bool previousLevelHigh = false;
+
+const unsigned long CLEAN_COOLDOWN_TIME = 60000;  // 60 segundos
+unsigned long lastCleanTriggerMs = 0;
+unsigned long lastCleanDurationMs = 0;
+
 
 // =====================================================
 // EEPROM
@@ -61,17 +95,17 @@ const int relays[] = {16, 17, 25, 26};
 #define EEPROM_INTERVAL_ADDR 0
 #define EEPROM_DURATION_ADDR 10
 
-int cleanIntervalSec = 300;
-int cleanDurationSec  = 60;
+//int cleanIntervalSec = 300;
+//int cleanDurationSec  = 60;
 
 // =====================================================
 // STATE / TIMERS
 // =====================================================
-unsigned long lastCycleChangeMs = 0;
-unsigned long lastStateStartMs  = 0;
+//unsigned long lastCycleChangeMs = 0;
+//unsigned long lastStateStartMs  = 0;
 unsigned long lastDisplay = 0;
 
-bool cleanActive = false;
+//bool cleanActive = false;
 
 // =====================================================
 // MQTT
@@ -84,7 +118,9 @@ const char* mqttPass = "Kusku2026";
 const int mqttPort = 1883;
 
 static unsigned long lastMQTTPublish = 0;
-const unsigned long MQTT_PUBLISH_INTERVAL = 10000; // 1 minuto
+const unsigned long MQTT_PUBLISH_INTERVAL = 10000;  // 1 minuto
+
+static unsigned long lastMQTTAttempt = 0;
 // =====================================================
 // WEB
 // =====================================================
@@ -100,73 +136,96 @@ Adafruit_SSD1306 display(SCREEN_WIDTH, SCREEN_HEIGHT, &Wire, -1);
 // =====================================================
 // MQTT CALLBACK
 // =====================================================
-void mqttCallback(char* topic, byte* payload, unsigned int length){
+void mqttCallback(char* topic, byte* payload, unsigned int length) {
 
-    char buf[32];
-    if(length >= sizeof(buf)) length = sizeof(buf) - 1;
+  char buf[32];
+  if (length >= sizeof(buf)) length = sizeof(buf) - 1;
 
-    memcpy(buf, payload, length);
-    buf[length] = 0;
+  memcpy(buf, payload, length);
+  buf[length] = 0;
 
-    int v = atoi(buf);
+  int v = atoi(buf);
 
+  /*
     if(String(topic) == "filtro/newCleanInterval"){
         if(v >= 10 && v <= 3600){
             cleanIntervalSec = v;
             EEPROM.put(EEPROM_INTERVAL_ADDR, cleanIntervalSec);
             EEPROM.commit();
         }
-    }
-
-    if(String(topic) == "filtro/newCleanDuration"){
-        if(v >= 1 && v <= 600){
-            cleanDurationSec = v;
-            EEPROM.put(EEPROM_DURATION_ADDR, cleanDurationSec);
-            EEPROM.commit();
-        }
-    }
+    }*/
 }
 
 // =====================================================
 // MQTT PUBLISH
 // =====================================================
-void publishMQTT(){
+void publishMQTT() {
+  if (!mqttClient.connected())
+    return;
 
-    if(!mqttClient.connected()) return;
+  char buf[32];
 
-    char msg[32];
+  // uptime
+  sprintf(buf, "%lu", millis() / 1000);
+  mqttClient.publish("filtro/uptime_sec", buf, true);
 
-    mqttClient.publish("filtro/state", cleanActive ? "CLEAN" : "WAIT", true);
+  // heap livre
+  sprintf(buf, "%u", ESP.getFreeHeap());
+  mqttClient.publish("filtro/free_heap", buf, true);
 
-    unsigned long now = millis();
-    unsigned long elapsed = (now - lastStateStartMs) / 1000;
+  // wifi rssi
+  sprintf(buf, "%d", WiFi.RSSI());
+  mqttClient.publish("filtro/wifi_rssi", buf, true);
 
-    unsigned long remaining;
+  // estado
+  switch (state) {
+    case STATE_NORMAL:
+      mqttClient.publish("filtro/state", "NORMAL", true);
+      break;
 
-    if(cleanActive)
-        remaining = (cleanDurationSec > elapsed) ? cleanDurationSec - elapsed : 0;
-    else
-        remaining = (cleanIntervalSec > elapsed) ? cleanIntervalSec - elapsed : 0;
+    case STATE_QUARTER_ROTATION:
+      mqttClient.publish("filtro/state", "ROTATING", true);
+      break;
 
-    sprintf(msg, "%lu", remaining);
-    mqttClient.publish("filtro/remaining_sec", msg, true);
+    case STATE_CLEAN:
+      mqttClient.publish("filtro/state", "CLEANING", true);
+      break;
+  }
 
-    sprintf(msg, "%lu", millis() / 1000);
-    mqttClient.publish("filtro/uptime_sec", msg, true);
+  unsigned long lastCleanIntervalSec =
+    lastCleanDurationMs / 1000;
+
+  sprintf(buf, "%lu", lastCleanIntervalSec);
+
+  mqttClient.publish(
+    "filtro/last_clean_interval_sec",
+    buf,
+    true);
+
+  // quarters
+  sprintf(buf, "%u", quarterRotations);
+  mqttClient.publish("filtro/quarters", buf, true);
+
+  // sensor nivel
+  mqttClient.publish(
+    "filtro/level_high",
+    digitalRead(LEVEL_SENSOR_PIN) == LOW ? "1" : "0",
+    true);
 }
 
 // =====================================================
 // WEB
 // =====================================================
-void handleRoot(){
+void handleRoot() {
 
+  /*
     if(server.hasArg("interval")){
         int v = server.arg("interval").toInt();
         if(v >= 10 && v <= 3600){
             cleanIntervalSec = v;
             EEPROM.put(EEPROM_INTERVAL_ADDR, cleanIntervalSec);
             EEPROM.commit();
-        }
+    
     }
 
     if(server.hasArg("duration")){
@@ -176,250 +235,329 @@ void handleRoot(){
             EEPROM.put(EEPROM_DURATION_ADDR, cleanDurationSec);
             EEPROM.commit();
         }
-    }
+    }*/
 
-    String html = "<html><h1>Filtro Lago</h1>";
-    html += "<p>Estado: " + String(cleanActive ? "CLEAN" : "WAIT") + "</p>";
+  String html = "<html><h1>Filtro Lago</h1>";
+
+  /*    html += "<p>Estado: " + String(cleanActive ? "CLEAN" : "WAIT") + "</p>";
     html += "<p>Intervalo: " + String(cleanIntervalSec) + " s</p>";
     html += "<p>Duracao: " + String(cleanDurationSec) + " s</p>";
+*/
+  html += "<form>";
+  html += "Intervalo: <input name='interval'><br>";
+  html += "Duracao: <input name='duration'><br>";
+  html += "<input type='submit'></form>";
 
-    html += "<form>";
-    html += "Intervalo: <input name='interval'><br>";
-    html += "Duracao: <input name='duration'><br>";
-    html += "<input type='submit'></form>";
+  html += "</html>";
 
-    html += "</html>";
-
-    server.send(200, "text/html", html);
+  server.send(200, "text/html", html);
 }
 
 // =====================================================
 // WIFI (SAFE RECONNECT)
 // =====================================================
-void handleWiFi(){
+void handleWiFi() {
 
-    if(WiFi.status() == WL_CONNECTED)
-        return;
+  if (WiFi.status() == WL_CONNECTED)
+    return;
 
-    if(millis() - lastAttempt < 10000)
-        return;
+  if (millis() - lastAttempt < 10000)
+    return;
 
-    lastAttempt = millis();
+  lastAttempt = millis();
 
-    Serial.println("[WiFi] reconnect...");
+  Serial.println("[WiFi] reconnect...");
 
-    WiFi.disconnect(true);
-    delay(200);
-    WiFi.begin(ssid, password);
+  WiFi.disconnect(true);
+  delay(200);
+  WiFi.begin(ssid, password);
 }
 
 // =====================================================
 // RELAYS
 // =====================================================
-void updateRelays(){
+void updateRelays() {
+  switch (state) {
+    // =================================================
+    // NORMAL
+    // =================================================
+    case STATE_NORMAL:
 
-    // limpeza ativa
-    digitalWrite(relays[RELAY_CLEAN], cleanActive ? LOW : HIGH);
+      // bomba ON
+      digitalWrite(relays[RELAY_PUMP], LOW);
 
-    // motor sempre ligado
-    digitalWrite(relays[RELAY_MOTOR], LOW);
+      // motor OFF
+      digitalWrite(relays[RELAY_MOTOR], HIGH);
 
-    // bomba sempre ligada
-    digitalWrite(relays[RELAY_PUMP], LOW);
+      // spray OFF
+      digitalWrite(relays[RELAY_CLEAN], HIGH);
 
-    // relay 3 invertido como pedido
-    digitalWrite(relays[3], cleanActive ? LOW : HIGH);
+      break;
+
+
+    // =================================================
+    // ROTACAO 1/4
+    // =================================================
+    case STATE_QUARTER_ROTATION:
+
+
+      // bomba ON
+      digitalWrite(relays[RELAY_PUMP], HIGH);
+
+      // motor ON
+      digitalWrite(relays[RELAY_MOTOR], LOW);
+
+      // spray OFF
+      digitalWrite(relays[RELAY_CLEAN], HIGH);
+
+      break;
+
+    // =================================================
+    // LIMPEZA TOTAL
+    // =================================================
+    case STATE_CLEAN:
+
+      // bomba OFF
+      digitalWrite(relays[RELAY_PUMP], HIGH);
+
+      // motor ON
+      digitalWrite(relays[RELAY_MOTOR], LOW);
+
+      // spray ON
+      digitalWrite(relays[RELAY_CLEAN], LOW);
+
+      break;
+  }
 }
 
 // =====================================================
 // DISPLAY
 // =====================================================
-void showDisplay(){
+void showDisplay() {
 
-    display.clearDisplay();
-    display.setTextColor(SSD1306_WHITE);
+  display.clearDisplay();
+  display.setTextColor(SSD1306_WHITE);
 
-    unsigned long now = millis();
-    unsigned long elapsed = (now - lastStateStartMs) / 1000;
+  //unsigned long remaining;
 
-    unsigned long remaining;
+  /*
     char mode = cleanActive ? 'C' : 'W';
 
     if(cleanActive)
         remaining = (cleanDurationSec > elapsed) ? cleanDurationSec - elapsed : 0;
     else
         remaining = (cleanIntervalSec > elapsed) ? cleanIntervalSec - elapsed : 0;
+    */
 
-    display.setTextSize(3);
-    display.setCursor(10, 20);
+  display.setTextSize(3);
+  display.setCursor(10, 20);
 
-    display.print(mode);
-    display.print(" ");
-    display.print(remaining);
-    display.print(" s");   // espaço antes do s
+  //display.print(mode);
+  display.print(" ");
+  //display.print(remaining);
+  display.print(" s");  // espaço antes do s
 
-    display.display();
+  display.display();
 }
 
 // =====================================================
 // SETUP
 // =====================================================
-void setup(){
+void setup() {
 
-    Serial.begin(115200);
 
-    EEPROM.begin(512);
+  pinMode(LEVEL_SENSOR_PIN, INPUT_PULLUP);
 
+  Serial.begin(115200);
+
+  EEPROM.begin(512);
+
+  /*
     EEPROM.get(EEPROM_INTERVAL_ADDR, cleanIntervalSec);
     EEPROM.get(EEPROM_DURATION_ADDR, cleanDurationSec);
 
     if(cleanIntervalSec < 10 || cleanIntervalSec > 3600) cleanIntervalSec = 300;
     if(cleanDurationSec < 1 || cleanDurationSec > 600) cleanDurationSec = 60;
+*/
 
-    for(int i=0;i<4;i++){
-        pinMode(relays[i], OUTPUT);
-        digitalWrite(relays[i], HIGH);
-    }
 
-    display.begin(SSD1306_SWITCHCAPVCC, 0x3C);
+  for (int i = 0; i < 4; i++) {
+    pinMode(relays[i], OUTPUT);
+    digitalWrite(relays[i], HIGH);
+  }
 
-    WiFi.config(localIP, dns, gateway, subnet);
-    WiFi.begin(ssid, password);
+  display.begin(SSD1306_SWITCHCAPVCC, 0x3C);
 
-    mqttClient.setServer(mqttServer, mqttPort);
-    mqttClient.setCallback(mqttCallback);
+  WiFi.config(localIP, dns, gateway, subnet);
+  WiFi.begin(ssid, password);
 
-    server.on("/", handleRoot);
-    server.begin();
+  mqttClient.setServer(mqttServer, mqttPort);
+  mqttClient.setCallback(mqttCallback);
 
-    lastCycleChangeMs = millis();
-    lastStateStartMs = millis();
+  server.on("/", handleRoot);
+  server.begin();
+
+  //lastCycleChangeMs = millis();
+  //lastStateStartMs = millis();
 }
 
-void printWiFiStatus(){
+void printWiFiStatus() {
 
-    wl_status_t st = WiFi.status();
+  wl_status_t st = WiFi.status();
 
-    Serial.print("[WiFi] estado: ");
+  Serial.print("[WiFi] estado: ");
 
-    switch(st){
+  switch (st) {
 
-        case WL_IDLE_STATUS:
-            Serial.println("IDLE");
-            break;
+    case WL_IDLE_STATUS:
+      Serial.println("IDLE");
+      break;
 
-        case WL_NO_SSID_AVAIL:
-            Serial.println("SSID nao encontrado");
-            break;
+    case WL_NO_SSID_AVAIL:
+      Serial.println("SSID nao encontrado");
+      break;
 
-        case WL_SCAN_COMPLETED:
-            Serial.println("SCAN COMPLETO");
-            break;
+    case WL_SCAN_COMPLETED:
+      Serial.println("SCAN COMPLETO");
+      break;
 
-        case WL_CONNECTED:
-            Serial.println("CONECTADO");
-            Serial.print("[WiFi] IP: ");
-            Serial.println(WiFi.localIP());
-            Serial.print("[WiFi] RSSI: ");
-            Serial.println(WiFi.RSSI());
-            break;
+    case WL_CONNECTED:
+      Serial.println("CONECTADO");
+      Serial.print("[WiFi] IP: ");
+      Serial.println(WiFi.localIP());
+      Serial.print("[WiFi] RSSI: ");
+      Serial.println(WiFi.RSSI());
+      break;
 
-        case WL_CONNECT_FAILED:
-            Serial.println("FALHA DE LIGACAO");
-            break;
+    case WL_CONNECT_FAILED:
+      Serial.println("FALHA DE LIGACAO");
+      break;
 
-        case WL_CONNECTION_LOST:
-            Serial.println("LIGACAO PERDIDA");
-            break;
+    case WL_CONNECTION_LOST:
+      Serial.println("LIGACAO PERDIDA");
+      break;
 
-        case WL_DISCONNECTED:
-            Serial.println("DESCONECTADO");
-            break;
+    case WL_DISCONNECTED:
+      Serial.println("DESCONECTADO");
+      break;
 
-        default:
-            Serial.println("DESCONHECIDO");
-            break;
-    }
+    default:
+      Serial.println("DESCONHECIDO");
+      break;
+  }
 }
 
 // =====================================================
 // LOOP
 // =====================================================
-void loop(){
+void loop() {
 
-    unsigned long now = millis();
+  unsigned long now = millis();
 
-    if(now - lastDisplay > 1000){
-        lastDisplay = now;
-        showDisplay();
-    }
+  if (now - lastDisplay > 1000) {
+    lastDisplay = now;
+    showDisplay();
+  }
 
-    handleWiFi();
+  handleWiFi();
 
-    // MQTT
-    if(WiFi.status() == WL_CONNECTED){
+  // MQTT
+  if (WiFi.status() == WL_CONNECTED) {
 
-        if(!mqttClient.connected()){
+    if (!mqttClient.connected()) {
+      if (now - lastMQTTAttempt > 5000) {
+        lastMQTTAttempt = now;
+        if (mqttClient.connect("filtroESP", mqttUser, mqttPass)) {
 
-            if(mqttClient.connect("filtroESP", mqttUser, mqttPass)){
+          mqttClient.subscribe("filtro/newCleanInterval");
+          mqttClient.subscribe("filtro/newCleanDuration");
 
-                mqttClient.subscribe("filtro/newCleanInterval");
-                mqttClient.subscribe("filtro/newCleanDuration");
-
-                mqttClient.publish("filtro/status", "online", true);
-            }
+          mqttClient.publish("filtro/status", "online", true);
         }
-
-        mqttClient.loop();
-        server.handleClient();
+      }
     }
 
-    // =================================================
-    // LOGICA LIMPEZA
-    // =================================================
+    mqttClient.loop();
+    server.handleClient();
+  }
 
-    unsigned long elapsed;
-    unsigned long remaining;
+  // =================================================
+  // LOGICA LIMPEZA
+  // =================================================
 
+  bool rawLevel = digitalRead(LEVEL_SENSOR_PIN) == LOW;
 
-    if(cleanActive)
-        elapsed = (millis() - lastStateStartMs) / 1000;
-    else
-        elapsed = (millis() - lastCycleChangeMs) / 1000;
+  static unsigned long levelStart = 0;
+  static bool levelHigh = false;
 
-    if(cleanActive)
-        remaining = (cleanDurationSec > elapsed) ? cleanDurationSec - elapsed : 0;
-    else
-        remaining = (cleanIntervalSec > elapsed) ? cleanIntervalSec - elapsed : 0;
+  if (rawLevel) {
+    if (levelStart == 0)
+      levelStart = millis();
 
-    // =====================================================
-    // TRANSIÇÃO ÚNICA E LIMPA
-    // =====================================================
-    if(!cleanActive && remaining == 0)
-    {
-        cleanActive = true;
-        lastStateStartMs = millis();
-        publishMQTT();
-    }
-     else
-    if(cleanActive && remaining == 0)
-    {
-        cleanActive = false;
-        lastCycleChangeMs = millis();
-        publishMQTT();
-    }
+    if (millis() - levelStart > 3000)
+      levelHigh = true;
+  } else {
+    levelStart = 0;
+    levelHigh = false;
+  }
 
-    // =====================================================
-    // RELAYS
-    // =====================================================
-    
-    updateRelays();
-    
-    // ================= MQTT PUBLISH 1 MIN =================
-    
-    if(millis() - lastMQTTPublish >= 10000){
-        lastMQTTPublish = millis();
-        publishMQTT();
-    }
+  bool levelTriggered = levelHigh && !previousLevelHigh;
 
+  previousLevelHigh = levelHigh;
+
+  switch (state) {
+    case STATE_NORMAL:
+
+      if (levelTriggered && (now - lastCleanTriggerMs > CLEAN_COOLDOWN_TIME)) {
+        if (lastCleanTriggerMs > 0) lastCleanDurationMs = now - lastCleanTriggerMs;
+
+        lastCleanTriggerMs = now;
+
+        if (quarterRotations > 3) {
+          quarterRotations = 0;
+          state = STATE_CLEAN;
+          stateStartMs = now;
+        } else {
+          state = STATE_QUARTER_ROTATION;
+          quarterRotations++;
+          stateStartMs = now;
+        }
+      }
+
+      break;
+
+    case STATE_QUARTER_ROTATION:
+
+      if (millis() - stateStartMs > QUARTER_ROTATION_TIME)  // -> tempo para rodar 1/4 de volta
+      {
+        state = STATE_NORMAL;
+        stateStartMs = millis();
+      }
+
+      break;
+
+    case STATE_CLEAN:
+
+      // segurança
+      if (millis() - stateStartMs > FULL_CLEAN_TIME)  // Tempo necessario para limpar tudo
+      {
+        state = STATE_NORMAL;
+        stateStartMs = millis();
+      }
+
+      break;
+  }
+
+  // =====================================================
+  // RELAYS
+  // =====================================================
+
+  updateRelays();
+
+  // ================= MQTT PUBLISH 1 MIN =================
+
+  if (millis() - lastMQTTPublish >= 10000) {
+    lastMQTTPublish = millis();
+    publishMQTT();
+  }
 }
