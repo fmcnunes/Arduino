@@ -217,42 +217,187 @@ void publishMQTT() {
 // WEB
 // =====================================================
 void handleRoot() {
+  String html;
 
-  /*
-    if(server.hasArg("interval")){
-        int v = server.arg("interval").toInt();
-        if(v >= 10 && v <= 3600){
-            cleanIntervalSec = v;
-            EEPROM.put(EEPROM_INTERVAL_ADDR, cleanIntervalSec);
-            EEPROM.commit();
-    
-    }
+  html += "<!DOCTYPE html>";
+  html += "<html>";
+  html += "<head>";
 
-    if(server.hasArg("duration")){
-        int v = server.arg("duration").toInt();
-        if(v >= 1 && v <= 600){
-            cleanDurationSec = v;
-            EEPROM.put(EEPROM_DURATION_ADDR, cleanDurationSec);
-            EEPROM.commit();
-        }
-    }*/
+  html += "<meta charset='utf-8'>";
+  html += "<meta name='viewport' content='width=device-width, initial-scale=1'>";
 
-  String html = "<html><h1>Filtro Lago</h1>";
+  html += "<title>Filtro Lago</title>";
 
-  /*    html += "<p>Estado: " + String(cleanActive ? "CLEAN" : "WAIT") + "</p>";
-    html += "<p>Intervalo: " + String(cleanIntervalSec) + " s</p>";
-    html += "<p>Duracao: " + String(cleanDurationSec) + " s</p>";
-*/
-  html += "<form>";
-  html += "Intervalo: <input name='interval'><br>";
-  html += "Duracao: <input name='duration'><br>";
-  html += "<input type='submit'></form>";
+  html += "<style>";
+  html += "body{font-family:Arial;background:#111;color:#eee;padding:20px;}";
+  html += "h1{color:#4fc3f7;}";
+  html += ".card{background:#1e1e1e;padding:15px;margin-bottom:15px;border-radius:10px;}";
+  html += ".ok{color:#4caf50;}";
+  html += ".warn{color:#ff9800;}";
+  html += ".bad{color:#f44336;}";
+  html += "table{width:100%;border-collapse:collapse;}";
+  html += "td{padding:6px;border-bottom:1px solid #333;}";
+  html += "</style>";
 
+  html += "<meta http-equiv='refresh' content='5'>";
+
+  html += "</head>";
+  html += "<body>";
+
+  html += "<h1>Filtro Lago</h1>";
+
+  // =====================================================
+  // ESTADO
+  // =====================================================
+
+  html += "<div class='card'>";
+  html += "<h2>Estado</h2>";
+
+  html += "<table>";
+
+  html += "<tr><td>Estado</td><td>";
+
+  switch (state) {
+    case STATE_NORMAL:
+      html += "<span class='ok'>NORMAL</span>";
+      break;
+
+    case STATE_QUARTER_ROTATION:
+      html += "<span class='warn'>ROTATING</span>";
+      break;
+
+    case STATE_CLEAN:
+      html += "<span class='bad'>CLEANING</span>";
+      break;
+  }
+
+  html += "</td></tr>";
+
+  html += "<tr><td>Quarter Rotations</td><td>";
+  html += String(quarterRotations);
+  html += "</td></tr>";
+
+  html += "<tr><td>Sensor Nivel</td><td>";
+
+  if (digitalRead(LEVEL_SENSOR_PIN) == LOW)
+    html += "<span class='bad'>HIGH</span>";
+  else
+    html += "<span class='ok'>NORMAL</span>";
+
+  html += "</td></tr>";
+
+  html += "</table>";
+  html += "</div>";
+
+  // =====================================================
+  // TEMPOS
+  // =====================================================
+
+  html += "<div class='card'>";
+  html += "<h2>Tempos</h2>";
+
+  html += "<table>";
+
+  html += "<tr><td>Ultimo Intervalo</td><td>";
+  html += String(lastCleanDurationMs / 1000);
+  html += " s</td></tr>";
+
+  html += "<tr><td>Cooldown</td><td>";
+
+  unsigned long cooldownRemaining = 0;
+
+  if (millis() - lastCleanTriggerMs < CLEAN_COOLDOWN_TIME) {
+    cooldownRemaining =
+      (CLEAN_COOLDOWN_TIME - (millis() - lastCleanTriggerMs)) / 1000;
+  }
+
+  html += String(cooldownRemaining);
+  html += " s</td></tr>";
+
+  html += "<tr><td>Uptime</td><td>";
+  html += String(millis() / 1000);
+  html += " s</td></tr>";
+
+  html += "</table>";
+  html += "</div>";
+
+  // =====================================================
+  // WIFI
+  // =====================================================
+
+  html += "<div class='card'>";
+  html += "<h2>WiFi</h2>";
+
+  html += "<table>";
+
+  html += "<tr><td>SSID</td><td>";
+  html += WiFi.SSID();
+  html += "</td></tr>";
+
+  html += "<tr><td>IP</td><td>";
+  html += WiFi.localIP().toString();
+  html += "</td></tr>";
+
+  html += "<tr><td>RSSI</td><td>";
+  html += String(WiFi.RSSI());
+  html += " dBm</td></tr>";
+
+  html += "</table>";
+  html += "</div>";
+
+  // =====================================================
+  // ESP32
+  // =====================================================
+
+  html += "<div class='card'>";
+  html += "<h2>ESP32</h2>";
+
+  html += "<table>";
+
+  html += "<tr><td>Free Heap</td><td>";
+  html += String(ESP.getFreeHeap());
+  html += "</td></tr>";
+
+  html += "<tr><td>CPU Freq</td><td>";
+  html += String(ESP.getCpuFreqMHz());
+  html += " MHz</td></tr>";
+
+  html += "<tr><td>Flash Size</td><td>";
+  html += String(ESP.getFlashChipSize() / 1024 / 1024);
+  html += " MB</td></tr>";
+
+  html += "</table>";
+  html += "</div>";
+
+  // =====================================================
+  // RELAYS
+  // =====================================================
+
+  html += "<div class='card'>";
+  html += "<h2>Relays</h2>";
+
+  html += "<table>";
+
+  html += "<tr><td>Bomba</td><td>";
+  html += digitalRead(relays[RELAY_PUMP]) == LOW ? "ON" : "OFF";
+  html += "</td></tr>";
+
+  html += "<tr><td>Motor</td><td>";
+  html += digitalRead(relays[RELAY_MOTOR]) == LOW ? "ON" : "OFF";
+  html += "</td></tr>";
+
+  html += "<tr><td>Spray</td><td>";
+  html += digitalRead(relays[RELAY_CLEAN]) == LOW ? "ON" : "OFF";
+  html += "</td></tr>";
+
+  html += "</table>";
+  html += "</div>";
+
+  html += "</body>";
   html += "</html>";
 
   server.send(200, "text/html", html);
 }
-
 // =====================================================
 // WIFI (SAFE RECONNECT)
 // =====================================================
