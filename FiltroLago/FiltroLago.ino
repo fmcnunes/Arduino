@@ -14,6 +14,9 @@
 
 static unsigned long lastAttempt = 0;
 
+
+static unsigned long debugTime = 0;
+
 // =====================================================
 // REDE
 // =====================================================
@@ -32,7 +35,7 @@ IPAddress localIP(192, 168, 1, 33);
 IPAddress gateway(192, 168, 1, 254);
 IPAddress subnet(255, 255, 255, 0);
 IPAddress dns(192, 168, 1, 254);
-const char* mqttServer = "192.168.1.50";
+const char* mqttServer = "quintinhadoslirios.ddns.net";
 #endif
 
 
@@ -49,16 +52,16 @@ void publishMQTT();
 // =====================================================
 // RELAYS
 // =====================================================
-const int relays[] = { 16, 17, 25, 26 };
+const int relays[] = { 25, 14, 27, 26 };
 
 #define RELAY_CLEAN 3
-#define RELAY_MOTOR 2
+#define RELAY_MOTOR 1
 #define RELAY_PUMP 0
 
 // =====================================================
 // SENSOR NIVEL
 // =====================================================
-#define LEVEL_SENSOR_PIN 21
+#define LEVEL_SENSOR_PIN 17
 
 // =====================================================
 // TEMPOS
@@ -480,19 +483,11 @@ void updateRelays() {
 // =====================================================
 void showDisplay() {
 
+
+/*
   display.clearDisplay();
   display.setTextColor(SSD1306_WHITE);
 
-  //unsigned long remaining;
-
-  /*
-    char mode = cleanActive ? 'C' : 'W';
-
-    if(cleanActive)
-        remaining = (cleanDurationSec > elapsed) ? cleanDurationSec - elapsed : 0;
-    else
-        remaining = (cleanIntervalSec > elapsed) ? cleanIntervalSec - elapsed : 0;
-    */
 
   display.setTextSize(3);
   display.setCursor(10, 20);
@@ -503,6 +498,7 @@ void showDisplay() {
   display.print(" s");  // espaço antes do s
 
   display.display();
+  */
 }
 
 // =====================================================
@@ -531,7 +527,7 @@ void setup() {
     digitalWrite(relays[i], HIGH);
   }
 
-  display.begin(SSD1306_SWITCHCAPVCC, 0x3C);
+  //display.begin(SSD1306_SWITCHCAPVCC, 0x3C);
 
   WiFi.config(localIP, dns, gateway, subnet);
   WiFi.begin(ssid, password);
@@ -632,6 +628,15 @@ void loop() {
 
   bool rawLevel = digitalRead(LEVEL_SENSOR_PIN) == LOW;
 
+  //rawLevel = ! rawLevel;
+
+  if (now - debugTime > 1000)
+  {
+  Serial.print("GPIO17 = ");
+  Serial.println(rawLevel);
+  debugTime = now;
+  }
+
   static unsigned long levelStart = 0;
   static bool levelHigh = false;
 
@@ -650,22 +655,27 @@ void loop() {
 
   previousLevelHigh = levelHigh;
 
+  levelTriggered = rawLevel;
+
   switch (state) {
     case STATE_NORMAL:
 
-      if (levelTriggered && (now - lastCleanTriggerMs > CLEAN_COOLDOWN_TIME)) {
+      /*if (levelTriggered && (now - lastCleanTriggerMs > CLEAN_COOLDOWN_TIME)) {
         if (lastCleanTriggerMs > 0) lastCleanDurationMs = now - lastCleanTriggerMs;
 
-        lastCleanTriggerMs = now;
+        lastCleanTriggerMs = now;*/
+if (levelTriggered) {
 
         if (quarterRotations > 3) {
           quarterRotations = 0;
           state = STATE_CLEAN;
           stateStartMs = now;
+          Serial.println("New state STATE_CLEAN");
         } else {
           state = STATE_QUARTER_ROTATION;
           quarterRotations++;
           stateStartMs = now;
+          Serial.println("New state STATE_QUARTER_ROTATION");
         }
       }
 
@@ -677,6 +687,7 @@ void loop() {
       {
         state = STATE_NORMAL;
         stateStartMs = millis();
+        Serial.println("New state STATE_NORMAL");
       }
 
       break;
@@ -688,6 +699,7 @@ void loop() {
       {
         state = STATE_NORMAL;
         stateStartMs = millis();
+        Serial.println("New state STATE_NORMAL");
       }
 
       break;
