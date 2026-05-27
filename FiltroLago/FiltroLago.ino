@@ -484,7 +484,7 @@ void updateRelays() {
 void showDisplay() {
 
 
-/*
+  /*
   display.clearDisplay();
   display.setTextColor(SSD1306_WHITE);
 
@@ -520,7 +520,7 @@ void setup() {
     if(cleanIntervalSec < 10 || cleanIntervalSec > 3600) cleanIntervalSec = 300;
     if(cleanDurationSec < 1 || cleanDurationSec > 600) cleanDurationSec = 60;
 */
-
+   lastCleanTriggerMs = millis();
 
   for (int i = 0; i < 4; i++) {
     pinMode(relays[i], OUTPUT);
@@ -630,11 +630,10 @@ void loop() {
 
   //rawLevel = ! rawLevel;
 
-  if (now - debugTime > 1000)
-  {
-  Serial.print("GPIO17 = ");
-  Serial.println(rawLevel);
-  debugTime = now;
+  if (now - debugTime > 1000) {
+    Serial.print("GPIO17 = ");
+    Serial.println(rawLevel);
+    debugTime = now;
   }
 
   static unsigned long levelStart = 0;
@@ -660,16 +659,15 @@ void loop() {
   switch (state) {
     case STATE_NORMAL:
 
-      /*if (levelTriggered && (now - lastCleanTriggerMs > CLEAN_COOLDOWN_TIME)) {
-        if (lastCleanTriggerMs > 0) lastCleanDurationMs = now - lastCleanTriggerMs;
 
-        lastCleanTriggerMs = now;*/
-if (levelTriggered) {
+      if (levelTriggered) {
 
         if (quarterRotations > 3) {
           quarterRotations = 0;
           state = STATE_CLEAN;
           stateStartMs = now;
+          lastCleanDurationMs = now - lastCleanTriggerMs;
+          lastCleanTriggerMs = now;
           Serial.println("New state STATE_CLEAN");
         } else {
           state = STATE_QUARTER_ROTATION;
