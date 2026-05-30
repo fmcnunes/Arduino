@@ -63,6 +63,11 @@ const int relays[] = { 25, 14, 27, 26 };
 // =====================================================
 #define LEVEL_SENSOR_PIN 17
 
+const unsigned long SENSOR_IGNORE_TIME = 5000;
+unsigned long ignoreSensorUntil = 0;
+
+  bool rawLevel = true;
+
 // =====================================================
 // TEMPOS
 // =====================================================
@@ -205,6 +210,12 @@ void publishMQTT() {
     buf,
     true);
 
+  mqttClient.publish(
+    "filtro/levelSensor",
+    rawLevel ? "1" : "0",
+    true);
+
+
   // quarters
   sprintf(buf, "%u", quarterRotations);
   mqttClient.publish("filtro/quarters", buf, true);
@@ -274,6 +285,10 @@ void handleRoot() {
       break;
   }
 
+  html += "</td></tr>";
+
+  html += "<tr><td>Level Sensor</td><td>";
+  html += String(rawLevel);
   html += "</td></tr>";
 
   html += "<tr><td>Quarter Rotations</td><td>";
@@ -450,7 +465,7 @@ void updateRelays() {
 
 
       // bomba ON
-      digitalWrite(relays[RELAY_PUMP], HIGH);
+      digitalWrite(relays[RELAY_PUMP], LOW);
 
       // motor ON
       digitalWrite(relays[RELAY_MOTOR], LOW);
@@ -466,7 +481,7 @@ void updateRelays() {
     case STATE_CLEAN:
 
       // bomba OFF
-      digitalWrite(relays[RELAY_PUMP], HIGH);
+      digitalWrite(relays[RELAY_PUMP], LOW);
 
       // motor ON
       digitalWrite(relays[RELAY_MOTOR], LOW);
@@ -626,15 +641,8 @@ void loop() {
   // LOGICA LIMPEZA
   // =================================================
 
-  bool rawLevel = digitalRead(LEVEL_SENSOR_PIN) == LOW;
+ rawLevel = digitalRead(LEVEL_SENSOR_PIN) == LOW;
 
-  //rawLevel = ! rawLevel;
-
-  if (now - debugTime > 1000) {
-    Serial.print("GPIO17 = ");
-    Serial.println(rawLevel);
-    debugTime = now;
-  }
 
   static unsigned long levelStart = 0;
   static bool levelHigh = false;
@@ -654,7 +662,25 @@ void loop() {
 
   previousLevelHigh = levelHigh;
 
-  levelTriggered = rawLevel;
+  //levelTriggered = rawLevel;
+
+
+
+
+  levelTriggered =  rawLevel;
+
+  if (millis() < ignoreSensorUntil) {
+    levelTriggered = false;}
+
+    if (now - debugTime > 1000) {
+    Serial.print("GPIO17 = ");
+    Serial.print(rawLevel);
+    Serial.print(",");
+    Serial.print(levelTriggered);
+    Serial.print(",");
+    Serial.println(millis() - ignoreSensorUntil);
+    debugTime = now;
+  }
 
   switch (state) {
     case STATE_NORMAL:
@@ -662,7 +688,7 @@ void loop() {
 
       if (levelTriggered) {
 
-        if (quarterRotations > 3) {
+        if (quarterRotations >= 3) {
           quarterRotations = 0;
           state = STATE_CLEAN;
           stateStartMs = now;
@@ -685,6 +711,7 @@ void loop() {
       {
         state = STATE_NORMAL;
         stateStartMs = millis();
+        ignoreSensorUntil = millis() + SENSOR_IGNORE_TIME;
         Serial.println("New state STATE_NORMAL");
       }
 
