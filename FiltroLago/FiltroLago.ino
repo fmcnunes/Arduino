@@ -66,7 +66,7 @@ const int relays[] = { 25, 14, 27, 26 };
 const unsigned long SENSOR_IGNORE_TIME = 5000;
 unsigned long ignoreSensorUntil = 0;
 
-  bool rawLevel = true;
+bool rawLevel = true;
 
 // =====================================================
 // TEMPOS
@@ -81,7 +81,8 @@ const unsigned long QUARTER_ROTATION_TIME = FULL_CLEAN_TIME / 4;
 enum FilterState {
   STATE_NORMAL,
   STATE_QUARTER_ROTATION,
-  STATE_CLEAN
+  STATE_CLEAN,
+  STATE_PAUSED
 };
 
 FilterState state = STATE_NORMAL;
@@ -95,6 +96,18 @@ static bool previousLevelHigh = false;
 const unsigned long CLEAN_COOLDOWN_TIME = 60000;  // 60 segundos
 unsigned long lastCleanTriggerMs = 0;
 unsigned long lastCleanDurationMs = 0;
+
+
+const unsigned long FILTER_PAUSE_TIME = 600000; // 10 min
+const unsigned long FAST_CLEAN_LIMIT = 180000; // 3 min
+
+
+#define CLEAN_HISTORY_LIMIT 3
+
+unsigned long cleanHistory[CLEAN_HISTORY_LIMIT] = { 0, 0, 0 };
+uint8_t cleanHistoryIndex = 0;
+
+unsigned long filterPauseUntil = 0;
 
 
 // =====================================================
@@ -197,6 +210,10 @@ void publishMQTT() {
 
     case STATE_CLEAN:
       mqttClient.publish("filtro/state", "CLEANING", true);
+      break;
+
+    case STATE_PAUSED:
+      mqttClient.publish("filtro/state", "PAUSED", true);
       break;
   }
 
@@ -441,6 +458,19 @@ void handleWiFi() {
 // =====================================================
 void updateRelays() {
   switch (state) {
+
+    // =================================================
+    // Em pausa
+    // =================================================
+
+    case STATE_PAUSED:
+
+    digitalWrite(relays[RELAY_PUMP], HIGH);   // bomba OFF
+    digitalWrite(relays[RELAY_MOTOR], HIGH);  // motor OFF
+    digitalWrite(relays[RELAY_CLEAN], HIGH);  // spray OFF
+
+    break;
+
     // =================================================
     // NORMAL
     // =================================================
@@ -535,7 +565,7 @@ void setup() {
     if(cleanIntervalSec < 10 || cleanIntervalSec > 3600) cleanIntervalSec = 300;
     if(cleanDurationSec < 1 || cleanDurationSec > 600) cleanDurationSec = 60;
 */
-   lastCleanTriggerMs = millis();
+  lastCleanTriggerMs = millis();
 
   for (int i = 0; i < 4; i++) {
     pinMode(relays[i], OUTPUT);
@@ -641,7 +671,7 @@ void loop() {
   // LOGICA LIMPEZA
   // =================================================
 
- rawLevel = digitalRead(LEVEL_SENSOR_PIN) == LOW;
+  rawLevel = digitalRead(LEVEL_SENSOR_PIN) == LOW;
 
 
   static unsigned long levelStart = 0;
@@ -667,12 +697,13 @@ void loop() {
 
 
 
-  levelTriggered =  rawLevel;
+  levelTriggered = rawLevel;
 
   if (millis() < ignoreSensorUntil) {
-    levelTriggered = false;}
+    levelTriggered = false;
+  }
 
-    if (now - debugTime > 1000) {
+  if (now - debugTime > 1000) {
     Serial.print("GPIO17 = ");
     Serial.print(rawLevel);
     Serial.print(",");
@@ -694,7 +725,22 @@ void loop() {
           stateStartMs = now;
           lastCleanDurationMs = now - lastCleanTriggerMs;
           lastCleanTriggerMs = now;
-          Serial.println("New state STATE_CLEAN");
+
+          cleanHistory[cleanHistoryIndex] = lastCleanDurationMs;
+          cleanHistoryIndex++;
+
+          if (cleanHistoryIndex >= 3)
+            cleanHistoryIndex = 0;
+
+          if (lastThreeCleansTooFast()) {
+
+            state = STATE_PAUSED;
+            filterPauseUntil = now + FILTER_PAUSE_TIME;
+
+            Serial.println("FILTER PAUSED 10 MIN");
+          } else {
+            Serial.println("New state STATE_CLEAN");
+          }
         } else {
           state = STATE_QUARTER_ROTATION;
           quarterRotations++;
@@ -704,6 +750,17 @@ void loop() {
       }
 
       break;
+    case STATE_PAUSED:
+
+    if(now >= filterPauseUntil) {
+
+      state = STATE_NORMAL;
+      ignoreSensorUntil = millis() + SENSOR_IGNORE_TIME;
+
+      Serial.println("Pause ended");
+    }
+
+    break;
 
     case STATE_QUARTER_ROTATION:
 
@@ -742,4 +799,21 @@ void loop() {
     lastMQTTPublish = millis();
     publishMQTT();
   }
+}
+
+// =====================================================
+// Verefica se as ultimas lavagens foram demasiado rápidas
+// =====================================================
+
+bool lastThreeCleansTooFast() {
+
+  for (int i = 0; i < CLEAN_HISTORY_LIMIT; i++) {
+    if (cleanHistory[i] == 0)
+      return false;
+
+    if (cleanHistory[i] >= FAST_CLEAN_LIMIT)
+      return false;
+  }
+
+  return true;
 }
