@@ -59,6 +59,24 @@ const int relays[] = { 25, 14, 27, 26 };
 #define RELAY_PUMP 0
 
 // =====================================================
+// Sensor de pressão
+// =====================================================
+
+#define PREASSURE_INPUT 34
+
+#define PREASSURE_HISTORY_LIMIT 3
+
+#define PREASSURE_MEASUREMENT_CYCLE 15000
+
+#define WATER_PREASSURE_LIMIT 10
+
+
+unsigned long lastPressureRead = 0;
+
+int preassureHistory[PREASSURE_HISTORY_LIMIT] = { -1, -1, -1 };
+uint8_t preassureHistoryIndex = 0;
+
+// =====================================================
 // SENSOR NIVEL
 // =====================================================
 #define LEVEL_SENSOR_PIN 17
@@ -219,6 +237,17 @@ void publishMQTT() {
 
   unsigned long lastCleanIntervalSec =
     lastCleanDurationMs / 1000;
+
+
+ if (preassureHistory[preassureHistoryIndex] > 0)
+  {
+   sprintf(buf, "%d", preassureHistory[preassureHistoryIndex]);
+
+    mqttClient.publish(
+    "filtro/water_preassure",
+    buf,
+    true);
+  }
 
   sprintf(buf, "%lu", lastCleanIntervalSec);
 
@@ -667,6 +696,24 @@ void loop() {
     server.handleClient();
   }
 
+  // ================================================
+  // Leitura da pressão
+  // ================================================
+
+   if (millis() - lastPressureRead > PREASSURE_MEASUREMENT_CYCLE)  // Tempo necessario para limpar tudo
+     {
+        lastPressureRead = millis();
+
+        preassureHistoryIndex++;
+        if (preassureHistoryIndex >= PREASSURE_HISTORY_LIMIT)
+          preassureHistoryIndex = 0;
+
+        preassureHistory[preassureHistoryIndex] = readPressureAverage();
+
+        Serial.print("Pressao Agua: ");
+        Serial.println(preassureHistory[preassureHistoryIndex]);
+    }
+
   // =================================================
   // LOGICA LIMPEZA
   // =================================================
@@ -732,12 +779,10 @@ void loop() {
           if (cleanHistoryIndex >= 3)
             cleanHistoryIndex = 0;
 
-          if (lastThreeCleansTooFast()) {
-
+          if (preassureMeasurementsLow() )
+          {
             state = STATE_PAUSED;
-            filterPauseUntil = now + FILTER_PAUSE_TIME;
-
-            Serial.println("FILTER PAUSED 10 MIN");
+            Serial.println("Filter Paused due to low water preassure Low");
           } else {
             Serial.println("New state STATE_CLEAN");
           }
@@ -752,12 +797,10 @@ void loop() {
       break;
     case STATE_PAUSED:
 
-    if(now >= filterPauseUntil) {
+    if(! preassureMeasurementsLow()) {
 
-      state = STATE_NORMAL;
-      ignoreSensorUntil = millis() + SENSOR_IGNORE_TIME;
-
-      Serial.println("Pause ended");
+      state = STATE_CLEAN;
+      Serial.println("Pause ended, next cleaning...");
     }
 
     break;
@@ -805,6 +848,23 @@ void loop() {
 // Verefica se as ultimas lavagens foram demasiado rápidas
 // =====================================================
 
+bool preassureMeasurementsLow() {
+
+  for (int i = 0; i < PREASSURE_HISTORY_LIMIT; i++) {
+    if (preassureHistory[i] < 0)
+      return false;
+
+    if (preassureHistory[i] > WATER_PREASSURE_LIMIT)
+      return false;
+  }
+
+  return true;
+}
+
+// =====================================================
+// Verefica se as ultimas lavagens foram demasiado rápidas
+// =====================================================
+
 bool lastThreeCleansTooFast() {
 
   for (int i = 0; i < CLEAN_HISTORY_LIMIT; i++) {
@@ -816,4 +876,18 @@ bool lastThreeCleansTooFast() {
   }
 
   return true;
+}
+
+int readPressureAverage()
+{
+    const int samples = 100;
+    long total = 0;
+
+    for (int i = 0; i < samples; i++)
+    {
+        total += analogRead(PREASSURE_INPUT);
+        delay(10);
+    }
+
+    return total / samples;
 }
