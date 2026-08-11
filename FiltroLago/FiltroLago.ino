@@ -68,7 +68,7 @@ const int relays[] = { 25, 14, 27, 26 };
 
 #define PREASSURE_MEASUREMENT_CYCLE 15000
 
-#define WATER_PREASSURE_LIMIT 10
+#define WATER_PREASSURE_LIMIT 300
 
 
 unsigned long lastPressureRead = 0;
@@ -494,7 +494,7 @@ void updateRelays() {
 
     case STATE_PAUSED:
 
-    digitalWrite(relays[RELAY_PUMP], HIGH);   // bomba OFF
+    digitalWrite(relays[RELAY_PUMP], LOW);   // bomba OFF
     digitalWrite(relays[RELAY_MOTOR], HIGH);  // motor OFF
     digitalWrite(relays[RELAY_CLEAN], HIGH);  // spray OFF
 
@@ -750,6 +750,7 @@ void loop() {
     levelTriggered = false;
   }
 
+/*
   if (now - debugTime > 1000) {
     Serial.print("GPIO17 = ");
     Serial.print(rawLevel);
@@ -758,7 +759,7 @@ void loop() {
     Serial.print(",");
     Serial.println(millis() - ignoreSensorUntil);
     debugTime = now;
-  }
+  } */
 
   switch (state) {
     case STATE_NORMAL:
