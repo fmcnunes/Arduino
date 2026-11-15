@@ -6,6 +6,9 @@
 #include <PubSubClient.h>
 #include <WebServer.h>
 
+#include <OneWire.h>
+#include <DallasTemperature.h>
+
 //
 // =====================================================
 // WIFI CONFIG
@@ -48,6 +51,10 @@ void handleWiFi();
 void updateRelays();
 void showDisplay();
 void publishMQTT();
+int log(const __FlashStringHelper* flashStr, ...);
+int log(char *str, ...);
+void loopTemperatureSensors();
+void setupTemperatureSensors();
 
 // =====================================================
 // RELAYS
@@ -57,6 +64,33 @@ const int relays[] = { 25, 14, 27, 26 };
 #define RELAY_CLEAN 3
 #define RELAY_MOTOR 1
 #define RELAY_PUMP 0
+
+// =====================================================
+// Sensor de temperatura
+// =====================================================
+
+// Data wire is plugged into digital pin 14 on the Arduino
+#define ONE_WIRE_BUS 13
+
+// Setup a oneWire instance to communicate with any OneWire devices
+OneWire oneWire(ONE_WIRE_BUS);
+
+// Pass oneWire reference to DallasTemperature library
+DallasTemperature sensors(&oneWire);
+
+int temperatureDeviceCount = 0; // Numero de sensores encontrados
+
+float waterTempC = 20;
+bool temperatureValid = false;
+
+const unsigned long TEMPERATURE_INTERVAL = 60000;
+const unsigned long TEMPERATURE_CONVERSION_TIME = 750;
+
+unsigned long lastTemperatureRequest = 0;
+unsigned long temperatureConversionStarted = 0;
+
+bool temperatureConversionPending = false;
+bool temperatureFirstRequest = true;
 
 // =====================================================
 // Sensor de pressão
@@ -73,8 +107,8 @@ const int relays[] = { 25, 14, 27, 26 };
 
 unsigned long lastPressureRead = 0;
 
-int preassureHistory[PREASSURE_HISTORY_LIMIT] = { -1, -1, -1 };
-uint8_t preassureHistoryIndex = 0;
+int pressureHistory[PREASSURE_HISTORY_LIMIT] = { -1, -1, -1 };
+uint8_t pressureHistoryIndex = 0;
 
 // =====================================================
 // SENSOR NIVEL
@@ -157,7 +191,7 @@ const char* mqttPass = "Kusku2026";
 const int mqttPort = 1883;
 
 static unsigned long lastMQTTPublish = 0;
-const unsigned long MQTT_PUBLISH_INTERVAL = 10000;  // 1 minuto
+const unsigned long MQTT_PUBLISH_INTERVAL = 10000;  // Tempo em milisegundos
 
 static unsigned long lastMQTTAttempt = 0;
 // =====================================================
@@ -212,6 +246,25 @@ void publishMQTT() {
   sprintf(buf, "%u", ESP.getFreeHeap());
   mqttClient.publish("filtro/free_heap", buf, true);
 
+  // water temperature
+
+  if (temperatureValid)
+   {
+    dtostrf(waterTempC, 1, 2, buf);
+
+    mqttClient.publish(
+        "filtro/waterTempC",
+        buf,
+        true
+    );
+  }
+
+  mqttClient.publish(
+    "filtro/waterTempValid",
+    temperatureValid ? "1" : "0",
+    true
+  );
+
   // wifi rssi
   sprintf(buf, "%d", WiFi.RSSI());
   mqttClient.publish("filtro/wifi_rssi", buf, true);
@@ -239,12 +292,12 @@ void publishMQTT() {
     lastCleanDurationMs / 1000;
 
 
- if (preassureHistory[preassureHistoryIndex] > 0)
+ if (pressureHistory[pressureHistoryIndex] > 0)
   {
-   sprintf(buf, "%d", preassureHistory[preassureHistoryIndex]);
+   sprintf(buf, "%d", pressureHistory[pressureHistoryIndex]);
 
     mqttClient.publish(
-    "filtro/water_preassure",
+    "filtro/water_pressure",
     buf,
     true);
   }
@@ -612,6 +665,8 @@ void setup() {
   server.on("/", handleRoot);
   server.begin();
 
+  setupTemperatureSensors();
+
   //lastCycleChangeMs = millis();
   //lastStateStartMs = millis();
 }
@@ -704,14 +759,14 @@ void loop() {
      {
         lastPressureRead = millis();
 
-        preassureHistoryIndex++;
-        if (preassureHistoryIndex >= PREASSURE_HISTORY_LIMIT)
-          preassureHistoryIndex = 0;
+        pressureHistoryIndex++;
+        if (pressureHistoryIndex >= PREASSURE_HISTORY_LIMIT)
+          pressureHistoryIndex = 0;
 
-        preassureHistory[preassureHistoryIndex] = readPressureAverage();
+        pressureHistory[pressureHistoryIndex] = readPressureAverage();
 
         Serial.print("Pressao Agua: ");
-        Serial.println(preassureHistory[preassureHistoryIndex]);
+        Serial.println(pressureHistory[pressureHistoryIndex]);
     }
 
   // =================================================
@@ -780,10 +835,10 @@ void loop() {
           if (cleanHistoryIndex >= 3)
             cleanHistoryIndex = 0;
 
-          if (preassureMeasurementsLow() )
+          if (pressureMeasurementsLow() )
           {
             state = STATE_PAUSED;
-            Serial.println("Filter Paused due to low water preassure Low");
+            Serial.println("Filter Paused due to low water pressure Low");
           } else {
             Serial.println("New state STATE_CLEAN");
           }
@@ -798,7 +853,7 @@ void loop() {
       break;
     case STATE_PAUSED:
 
-    if(! preassureMeasurementsLow()) {
+    if(! pressureMeasurementsLow()) {
 
       state = STATE_CLEAN;
       Serial.println("Pause ended, next cleaning...");
@@ -837,9 +892,15 @@ void loop() {
 
   updateRelays();
 
+  // =====================================================
+  // Temperatura
+  // =====================================================
+
+  loopTemperatureSensors();
+
   // ================= MQTT PUBLISH 1 MIN =================
 
-  if (millis() - lastMQTTPublish >= 10000) {
+  if (millis() - lastMQTTPublish >= MQTT_PUBLISH_INTERVAL) {
     lastMQTTPublish = millis();
     publishMQTT();
   }
@@ -849,13 +910,13 @@ void loop() {
 // Verefica se as ultimas lavagens foram demasiado rápidas
 // =====================================================
 
-bool preassureMeasurementsLow() {
+bool pressureMeasurementsLow() {
 
   for (int i = 0; i < PREASSURE_HISTORY_LIMIT; i++) {
-    if (preassureHistory[i] < 0)
+    if (pressureHistory[i] < 0)
       return false;
 
-    if (preassureHistory[i] > WATER_PREASSURE_LIMIT)
+    if (pressureHistory[i] > WATER_PREASSURE_LIMIT)
       return false;
   }
 
@@ -891,4 +952,69 @@ int readPressureAverage()
     }
 
     return total / samples;
+}
+
+// ==============================================================
+// Sensor de temperatura
+// ==============================================================
+
+void setupTemperatureSensors()
+{
+    sensors.begin();
+
+    temperatureDeviceCount = sensors.getDeviceCount();
+
+    Serial.print("Found ");
+    Serial.print(temperatureDeviceCount);
+    Serial.println(" temperature sensors.");
+
+    sensors.setResolution(12);
+    sensors.setWaitForConversion(false);
+
+    temperatureValid = false;
+}
+
+void loopTemperatureSensors()
+{
+    unsigned long now = millis();
+
+    // Verificar se a conversão terminou
+    if (temperatureConversionPending &&
+        now - temperatureConversionStarted >= TEMPERATURE_CONVERSION_TIME)
+    {
+        float temp = sensors.getTempCByIndex(0);
+
+        temperatureConversionPending = false;
+
+        if (temp != DEVICE_DISCONNECTED_C &&
+            temp >= -55.0 && temp <= 125.0)
+        {
+            waterTempC = temp;
+            temperatureValid = true;
+
+            Serial.print("Water temperature: ");
+            Serial.print(waterTempC, 2);
+            Serial.println(" C");
+        }
+        else
+        {
+            temperatureValid = false;
+            Serial.println("Temperature sensor error!");
+        }
+    }
+
+    // Iniciar nova conversão
+    if (!temperatureConversionPending &&
+        temperatureDeviceCount > 0 &&
+        (temperatureFirstRequest ||
+         now - lastTemperatureRequest >= TEMPERATURE_INTERVAL))
+    {
+        lastTemperatureRequest = now;
+        temperatureFirstRequest = false;
+
+        sensors.requestTemperatures();
+
+        temperatureConversionStarted = now;
+        temperatureConversionPending = true;
+    }
 }
