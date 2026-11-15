@@ -1,0 +1,12 @@
+
+
+Com inicio às 00h do dia 19 observa-se um período de tempo que inclui o incidente, onde existe um aumento substancial do nº de chamadas ao sistema operativo. A origem deste aumento é desconhecido. Este comportamento está correlacionado com um aumento do consumo de CPU na ordem dos 8%, mais overhead do vmware. Este consumo consumo adicional de Cpu foi relevante no incidente que motivou a decisão de upgrade no final do mês.
+
+
+
+histórico
+impacto financeiro
+
+
+hA[$Z<tB&S2u/Jg{:wq!
+

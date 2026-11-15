@@ -56,6 +56,13 @@ int log(char *str, ...);
 void loopTemperatureSensors();
 void setupTemperatureSensors();
 
+
+// =====================================================
+// Versão de Firmware
+// =====================================================
+
+const float FIRMWARE_VERSION = 2.1;
+
 // =====================================================
 // RELAYS
 // =====================================================
@@ -70,7 +77,7 @@ const int relays[] = { 25, 14, 27, 26 };
 // =====================================================
 
 // Data wire is plugged into digital pin 14 on the Arduino
-#define ONE_WIRE_BUS 13
+#define ONE_WIRE_BUS 4
 
 // Setup a oneWire instance to communicate with any OneWire devices
 OneWire oneWire(ONE_WIRE_BUS);
@@ -82,6 +89,7 @@ int temperatureDeviceCount = 0; // Numero de sensores encontrados
 
 float waterTempC = 20;
 bool temperatureValid = false;
+
 
 const unsigned long TEMPERATURE_INTERVAL = 60000;
 const unsigned long TEMPERATURE_CONVERSION_TIME = 750;
@@ -637,6 +645,9 @@ void setup() {
   pinMode(LEVEL_SENSOR_PIN, INPUT_PULLUP);
 
   Serial.begin(115200);
+
+  Serial.print("\n\nStarting up FiltroLago firmware version ");
+  Serial.println(FIRMWARE_VERSION);
 
   EEPROM.begin(512);
 
