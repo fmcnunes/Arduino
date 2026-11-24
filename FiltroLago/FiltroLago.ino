@@ -92,13 +92,24 @@ bool temperatureValid = false;
 
 
 const unsigned long TEMPERATURE_INTERVAL = 60000;
-const unsigned long TEMPERATURE_CONVERSION_TIME = 750;
+const unsigned long TEMPERATURE_CONVERSION_TIME = 400;
 
 unsigned long lastTemperatureRequest = 0;
 unsigned long temperatureConversionStarted = 0;
 
 bool temperatureConversionPending = false;
 bool temperatureFirstRequest = true;
+
+DeviceAddress temperatureAddress;
+
+bool temperatureSensorFound = false;
+
+uint8_t temperatureFailures = 0;
+
+unsigned long lastTemperatureRecovery = 0;
+
+const unsigned long TEMPERATURE_RECOVERY_INTERVAL = 10000;
+const uint8_t TEMPERATURE_FAILURE_LIMIT = 2;
 
 // =====================================================
 // Sensor de pressão
@@ -969,7 +980,173 @@ int readPressureAverage()
 // Sensor de temperatura
 // ==============================================================
 
+
 void setupTemperatureSensors()
+{
+    sensors.begin();
+
+    sensors.setWaitForConversion(false);
+
+    temperatureSensorFound =
+        sensors.getAddress(temperatureAddress, 0);
+
+    temperatureDeviceCount =
+        temperatureSensorFound ? 1 : 0;
+
+    if (temperatureSensorFound)
+    {
+        sensors.setResolution(temperatureAddress, 11);
+        Serial.println("[Dallas] Sensor encontrado.");
+    }
+    else
+    {
+        Serial.println("[Dallas] Sensor nao encontrado.");
+    }
+
+    temperatureValid = false;
+    temperatureFailures = 0;
+}
+
+
+bool recoverTemperatureSensor()
+{
+    Serial.println("[Dallas] A tentar recuperar OneWire...");
+
+    // Limpar pesquisa anterior
+    oneWire.reset_search();
+
+    // Reinicializar biblioteca e pesquisa
+    sensors.begin();
+
+    sensors.setWaitForConversion(false);
+
+    temperatureSensorFound =
+        sensors.getAddress(temperatureAddress, 0);
+
+    temperatureDeviceCount =
+        temperatureSensorFound ? 1 : 0;
+
+    if (temperatureSensorFound)
+    {
+        sensors.setResolution(temperatureAddress, 11);
+
+        temperatureFailures = 0;
+
+        Serial.println("[Dallas] Sensor recuperado.");
+
+        return true;
+    }
+
+    Serial.println("[Dallas] Sensor continua ausente.");
+
+    return false;
+}
+
+
+void loopTemperatureSensors()
+{
+    unsigned long now = millis();
+
+    // ==========================================
+    // Recuperação quando o sensor está ausente
+    // ==========================================
+
+    if (!temperatureSensorFound)
+    {
+        if (now - lastTemperatureRecovery >=
+            TEMPERATURE_RECOVERY_INTERVAL)
+        {
+            lastTemperatureRecovery = now;
+
+            recoverTemperatureSensor();
+        }
+
+        return;
+    }
+
+    // ==========================================
+    // Verificar conversão terminada
+    // ==========================================
+
+    if (temperatureConversionPending &&
+        now - temperatureConversionStarted >=
+        TEMPERATURE_CONVERSION_TIME)
+    {
+        float temp = sensors.getTempC(temperatureAddress);
+
+        temperatureConversionPending = false;
+
+        if (temp != DEVICE_DISCONNECTED_C &&
+            temp >= -55.0 &&
+            temp <= 125.0)
+        {
+            waterTempC = temp;
+            temperatureValid = true;
+
+            temperatureFailures = 0;
+
+            Serial.print("[Dallas] Temperatura: ");
+            Serial.print(waterTempC, 2);
+            Serial.println(" C");
+        }
+        else
+        {
+            temperatureValid = false;
+
+            temperatureFailures++;
+
+            Serial.print("[Dallas] Falha de leitura: ");
+            Serial.println(temperatureFailures);
+
+            if (temperatureFailures >=
+                TEMPERATURE_FAILURE_LIMIT)
+            {
+                temperatureSensorFound = false;
+                lastTemperatureRecovery = now;
+
+                Serial.println(
+                    "[Dallas] Sensor perdido. "
+                    "Iniciando recuperacao."
+                );
+            }
+        }
+    }
+
+    // ==========================================
+    // Iniciar nova conversão
+    // ==========================================
+
+    if (!temperatureConversionPending &&
+        temperatureSensorFound &&
+        (temperatureFirstRequest ||
+         now - lastTemperatureRequest >=
+         TEMPERATURE_INTERVAL))
+    {
+        lastTemperatureRequest = now;
+        temperatureFirstRequest = false;
+
+        sensors.requestTemperaturesByAddress(
+            temperatureAddress
+        );
+
+        temperatureConversionStarted = now;
+        temperatureConversionPending = true;
+    }
+}
+
+
+
+
+
+
+
+
+
+
+
+
+
+void _setupTemperatureSensors()
 {
     sensors.begin();
 
@@ -985,7 +1162,7 @@ void setupTemperatureSensors()
     temperatureValid = false;
 }
 
-void loopTemperatureSensors()
+void _loopTemperatureSensors()
 {
     unsigned long now = millis();
 
